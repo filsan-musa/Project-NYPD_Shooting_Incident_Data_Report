@@ -1,0 +1,703 @@
+---
+title: "NYPD Shooting Incident Data Report"
+author: "Filsan Musa"
+date: ""
+output:
+  html_document:
+    css: assets/rany_style.css
+    df_print: paged
+    highlight: rstudio
+    theme: simplex
+    toc: true
+    toc_float:
+      collapsed: true
+    number_sections: false
+  pdf_document:
+    toc: true
+    number_sections: true
+    highlight: kate   # `kate`,  or `rstudio` 
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Required Packages & Libraries
+
+```{R, echo = TRUE, message=FALSE}
+#install.packages("tidyverse")
+#install.packages("ggthemes")
+#install.packages("dbscan")
+#install.packages("scales")
+library("tidyverse")
+library("ggthemes")
+library("dbscan")
+library("scales")
+```
+Note: Uncomment by removing "#" to use.
+
+# Introduction
+
+In this report, we explore the NYPD Shooting Incident dataset to uncover patterns and trend of these incidents across different boroughs. The analysis begins with a methodology section, in which we conduct a preliminary visual exploration of the dataset and perform essential data cleaning steps. We then outline our planned modeling approach, discussing the types of models to be used and the specific questions we aim to address in the model evaluation section. It is in this section, where we'll build and evaluate two models: the first model is a spatial clustering using DBSCAN, which examines the geographic dispersion of shooting incidents; in the second model, we perform a time series analysis that investigates borough-level trends in reported shootings (per capita of 100K residents) from 2023-2024. We then disclose potential biases, challenges and limitation faced throughout this project. Finally, we conclude with a brief discussion that reflects on the overall analytical process, from data pre-processing phase through model building and evaluation, to highlight key takeaways.
+
+## Data Description
+The dataset is a compilation of all reported shooting incidents that occurred in New York City from 2006 through the end of the year prior, 2024. Each row contains information pertaining to a unique shooting incident and includes details such as location coordinates and borough of the incident, the time and date, as well as demographic information about the perpetrator and victim, including age, sex, and race. The data is manually extracted on a quarterly basis and is reviewed by the Office of Management Analysis and Planning prior to being posted on the NYPD website.
+
+**Data Source:** <https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>
+
+### Data Dictionary
+
+```{r, results='asis', echo=FALSE}
+if (knitr::is_html_output()) {
+  cat('
+  <table border="1" style="border-collapse: collapse; width: 100%;">
+    <thead>
+      <tr>
+        <th>Variable</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>INCIDENT_KEY</td><td>Synthetic generated key for each unique incident</td></tr>
+      <tr><td>OCCUR_DATE</td><td>Date of the shooting incident</td></tr>
+      <tr><td>OCCUR_TIME</td><td>Time of the incident</td></tr>
+      <tr><td>BORO</td><td>Borough in which the incident took place</td></tr>
+      <tr><td>LOC_OF_OCCUR_DESC</td><td>Whether or not the incident resulted in victim\'s murder</td></tr>
+      <tr><td>PRECINCT</td><td>Precinct the shooting was reported to</td></tr>
+      <tr><td>LOC_CLASSFCTN_DESC</td><td>Location classification description</td></tr>
+      <tr><td>LOCATION_DESC</td><td>Description of the location</td></tr>
+      <tr><td>STATISTICAL_MURDER_FLAG</td><td>Indicates whether or not the incident was classified as a murder</td></tr>
+      <tr><td>PERP_AGE_GROUP</td><td>Perpetrator\'s age group</td></tr>
+      <tr><td>PERP_SEX</td><td>Perpetrator\'s sex</td></tr>
+      <tr><td>PERP_RACE</td><td>Perpetrator\'s race</td></tr>
+      <tr><td>VIC_AGE_GROUP</td><td>Victim\'s age group</td></tr>
+      <tr><td>VIC_SEX</td><td>Victim\'s sex</td></tr>
+      <tr><td>VIC_RACE</td><td>Victim\'s race</td></tr>
+      <tr><td>X_COORD_CD</td><td>X coordinate (NYC spatial coordinate system)</td></tr>
+      <tr><td>Y_COORD_CD</td><td>Y coordinate (NYC spatial coordinate system)</td></tr>
+      <tr><td>Latitude</td><td>Location latitude</td></tr>
+      <tr><td>Longitude</td><td>Location longitude</td></tr>
+      <tr><td>Lon_Lat</td><td>Combined longitude and latitude coordinates</td></tr>
+      <tr><td>JURISDICTION_CODE</td><td>Jurisdiction responsible for arrest (0: NYPD Patrol, 1: NYPD Transit, and 2: NYPD Housing)</td></tr>
+    </tbody>
+  </table>
+  <p>Table 1: Data dictionary for NYPD Shooting Incident Dataset (Historic)</p>
+  ')
+}
+```
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{|l|p{10cm}|}
+\hline
+\textbf{Variable} & \textbf{Description} \\
+\hline
+INCIDENT\_KEY & Synthetic generated key for each unique incident \\
+OCCUR\_DATE & Date of the shooting incident \\
+OCCUR\_TIME & Time of the incident \\
+BORO & Borough in which the incident took place \\
+LOC\_OF\_OCCUR\_DESC & Whether or not the incident resulted in victim's murder \\
+PRECINCT & Precinct the shooting was reported to \\
+LOC\_CLASSFCTN\_DESC & Location classification description \\
+LOCATION\_DESC & Description of the location \\
+STATISTICAL\_MURDER\_FLAG & Indicates whether or not the incident was classified as a murder \\
+PERP\_AGE\_GROUP & Perpetrator's age group \\
+PERP\_SEX & Perpetrator's sex \\
+PERP\_RACE & Perpetrator's race \\
+VIC\_AGE\_GROUP & Victim's age group \\
+VIC\_SEX & Victim's sex \\
+VIC\_RACE & Victim's race \\
+X\_COORD\_CD & X coordinate (NYC spatial coordinate system) \\
+Y\_COORD\_CD & Y coordinate (NYC spatial coordinate system) \\
+Latitude & Location latitude \\
+Longitude & Location longitude \\
+Lon\_Lat & Combined longitude and latitude coordinates \\
+JURISDICTION\_CODE & Jurisdiction responsible for arrest (0: NYPD Patrol, 1: NYPD Transit, and 2: NYPD Housing) \\
+\hline
+\end{tabular}
+\caption{Data dictionary for NYPD Shooting Incident Dataset (Historic)}
+\end{table}
+
+# Methodology 
+In this segment of the report, the main focus is to first conduct an exploration of the data by examining its properties, generating summaries, and performing a brief preliminary  analysis of the dataset. The goal is then to clean the data by dropping irrelevant columns, adjusting data types, removing duplicates, identifying and addressing missing values, feature engineering and renaming the columns.
+
+## Import Dataset
+
+```{r, comment=NA}
+#Defining url for the file we want to access
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+#Importing and naming the datasets
+data <- read.csv(url_in[1])
+```
+
+## Data Exploration
+
+First, let's look at the dimensions, and size of our dataset...
+
+
+```{r, comment=NA}
+#Shows the # of row and columns in your dataset
+dim(data)
+```
+
+```{r, comment=NA}
+#Shows the # of entries in your dataset
+prod(dim(data))
+```
+
+
+Next, let's take a take a glance at our dataset to learn a bit more
+```{r, comment=NA}
+#Shows first two rows of the dataset
+head(data, 2) 
+#Shows final two rows of the dataset
+tail(data, 2) 
+```
+
+Finally, let's perform a brief preliminary analysis before cleaning the data.
+
+```{r, comment=NA}
+#Shows information about the # of rows and columns, and lists the columns along 
+#with their data types and contents
+glimpse(data)
+```
+
+```{r, comment=NA}
+#Shows summary statistics for each column in the dataset
+summary(data)
+```
+
+- Shooting Incidents Per Borough
+
+```{r, comment=NA}
+#Shows a bar plot of the incident counts per borough
+ggplot(data, aes(x = BORO)) +
+  geom_bar(position = "dodge", fill = "#680001") +
+  labs(
+       title = "Shooting Incident by Borough",
+       x = "Borough",
+       y = "Count",
+       fill = "Murder Flag") + theme_stata() + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+#Shows the actual number of incidents per borough
+data %>%
+  count(BORO, name = "COUNT_INCIDENTS")
+```
+
+
+**Note:** Both the graph and table above illustrate why data cannot simply be interpreted in isolation. For instance, one could preemptively conclude that because it could appear that Brooklyn has the highest number of incidents is must have a higher crime rate. Though this conclusion might indeed be true, as of 2024 Brooklyn is the most populous of the five boroughs. In fact, here are the recorded populations: Brooklyn (2,617,631), Queens (2,316,841), Manhattan (1,660,664), The Bronx (1,384,724), and Staten Island (498,212). Perhaps looking at the per capita shooting incidents may provide a more accurate representation of crime distribution across the boroughs, yielding a better understanding of shooting related crime in New York City.
+
+- Fatal vs. Non-Fatal Shooting Incidents Per Borough 
+
+```{r}
+#Shows a bar plot of the incidents grouped on murder flags per borough
+ggplot(data, aes(x = BORO, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("false" = "#680001", "true" = "#d3aaa2")) +
+  labs(
+       title = "Ratio of Fatal vs Non-Fatal Shooting Incidents by Borough",
+       x = NULL,
+       y = "Ratio",
+       fill = "Murder Flag") +
+  coord_flip() + theme_stata() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text.y = element_text(angle = 0))
+```
+
+**Note:** The above graph is a visual representation of the ratio of fatal to non-fatal reported shooting incidents in each borough. (See following note for additional details)
+
+
+```{r, comment=NA}
+#Creates a alt dataframe with numeric version of STATISTICAL_MURDER_FLAG 
+temp_data <- data %>%
+  mutate(MURDER_FLAG = ifelse(tolower(STATISTICAL_MURDER_FLAG) == "true", 1, 0))
+
+#Shows a table of the incident counts, fatality and non-fatality rates per borough
+murder_boro <- temp_data %>%
+  group_by(BORO) %>%
+  summarise(COUNT_INCIDENTS = n(), COUNT_FATAL = sum(MURDER_FLAG, na.rm = TRUE)) %>%
+  mutate(FATAL_RATE_PRCT = round(COUNT_FATAL / COUNT_INCIDENTS, 2) * 100) %>%
+  mutate(NONFATAL_RATE_PRCT = round((COUNT_INCIDENTS-COUNT_FATAL)/COUNT_INCIDENTS, 2) *100) 
+print(murder_boro)
+```
+**Note:** Upon examining the percentage of fatal and non-fatal shooting incidents, there seems to be little variation between the boroughs. These numbers could potentially signal that no specific borough experiences a disproportionately higher rate of lethally indented shootings. However, this may not be entirely accurate, since we cannot infer from the given data whether or not the perpetrator had an intent to kill. All that we can infer with the given data, is that the ratio of fatal to non-fatal shooting incidents appears to be relatively consistent across boroughs.
+
+## Data Cleaning
+
+In this segment of the report, we're going to get the data ready for modeling. Specifically, we'll be doing the following:
+
+- Feature Engineering 
+- Remove irrelevant columns
+- Check for duplicate rows
+- Check & deal w/ missing values
+- Refactor column names
+
+Before we get started with the data cleaning, let's create a copy of the initial dataset, and call it `nyc_shoot`.
+
+```{r}
+nyc_shoot <- data
+```
+
+Note: We are creating this new table `nyc_shoot`, which will contain the processed data. And we may refer back to the original unaltered version `data`.
+
+- Feature Engineering
+
+```{r}
+#Creating new numeric variable based on STATISTICAL_MURDER_FLAG bool categories
+nyc_shoot$MURDER_FLAG = ifelse(tolower(nyc_shoot$STATISTICAL_MURDER_FLAG) == "true", 1, 0)
+```
+
+```{r}
+glimpse(nyc_shoot)
+```
+
+```{r}
+#Let's fix the some of the column data types
+nyc_shoot <- nyc_shoot %>% mutate(
+    BORO = as.factor(BORO),
+    PERP_AGE_GROUP = as.factor(PERP_AGE_GROUP),
+    PERP_SEX = as.factor(PERP_SEX),
+    PERP_RACE = as.factor(PERP_RACE),
+    VIC_AGE_GROUP = as.factor(VIC_AGE_GROUP),
+    VIC_SEX = as.factor(VIC_SEX),
+    VIC_RACE = as.factor(VIC_RACE),
+    MURDER_FLAG = as.integer(MURDER_FLAG))
+```
+
+```{r}
+#Creating a timestamp variable by merging OCCUR_DATE and OCCUR_TIME
+nyc_shoot$OCCUR_DATETIME <- mdy_hms(paste(nyc_shoot$OCCUR_DATE, nyc_shoot$OCCUR_TIME))
+```
+
+Note: Created two new variables: `MURDER_FLAG`, `OCCUR_DATETIME`. `MURDER_FLAG` is an encoded integer version of `STATISTICAL_MURDER_FLAG` (which is a character variable). `OCCUR_DATETIME` is a datetime variable combining `OCCUR_DATE` and `OCCUR_TIME` variables, so we can now extract all datetime info from a single column.
+
+- Remove irrelevant columns
+
+```{r}
+#OCCUR_DATE, and OCCUR_TIME are not represented by OCCUR_DATETIME
+nyc_shoot <- subset(nyc_shoot, select = -c(OCCUR_DATE, OCCUR_TIME))
+```
+
+```{r}
+#STATISTICAL_MURDER_FLAG has been replaced by MURDER_FLAG
+nyc_shoot <- subset(nyc_shoot, select = -c(STATISTICAL_MURDER_FLAG))
+```
+
+```{r}
+#Removed due to redundancy, we already have Latitude, Longitude, and BORO for location info
+nyc_shoot <- subset(nyc_shoot, select = -c(X_COORD_CD, Y_COORD_CD, Lon_Lat))
+```
+
+```{r}
+#Not relevant, auto-generated identifiers
+nyc_shoot <- subset(nyc_shoot, select = -c(INCIDENT_KEY))
+```
+
+```{r}
+#Removed columns irrelevant to planned analysis
+nyc_shoot <- subset(nyc_shoot, select = -c(JURISDICTION_CODE))
+```
+
+
+- Check for duplicate rows
+
+```{r}
+#Shows the total number of duplicated rows
+sum(duplicated(nyc_shoot))
+```
+
+Note: Since there are no duplicate rows within our dataset, there are no further steps are required.
+
+\
+\
+
+- Check & deal w/ missing values
+
+First, let's go through the entire dataset to see whether or not we have missing data
+
+```{r}
+colSums(is.na(nyc_shoot))
+```
+Let's deal with the missing values identified.
+
+```{r}
+#Shows total number of missing values
+sum(is.na(nyc_shoot$Latitude))
+sum(is.na(nyc_shoot$Longitude))
+
+#Compute mean values for Latitude and Longitude by BORO
+mean_lat_by_boro <- nyc_shoot %>%
+  group_by(BORO) %>%
+  summarise(mean_lat = mean(Latitude, na.rm = TRUE)) #Finds mean Latitude by BORO
+
+mean_lon_by_boro <- nyc_shoot %>%
+  group_by(BORO) %>%
+  summarise(mean_lon = mean(Longitude, na.rm = TRUE)) #Finds mean Longitude by BORO
+
+#Impute missing value using calculated means
+nyc_shoot <- nyc_shoot %>%
+  left_join(mean_lat_by_boro, by = "BORO") %>%
+  mutate(Latitude = ifelse(is.na(Latitude), mean_lat, Latitude)) %>% 
+  select(-mean_lat) #Imputes missing Latitude values with means from prev. computations
+
+nyc_shoot <- nyc_shoot %>%
+  left_join(mean_lon_by_boro, by = "BORO") %>%
+  mutate(Longitude = ifelse(is.na(Longitude), mean_lon, Longitude)) %>%
+  select(-mean_lon) #Imputes missing Longitude values with means from prev. computations
+```
+
+```{r}
+#Verifying no missing values remain
+sum(is.na(nyc_shoot$Latitude))
+sum(is.na(nyc_shoot$Longitude))
+```
+
+
+Next, let's look into some of the other variables (not identified as having missing values)
+```{r}
+#Looks through distinct values within the location related categorical variables
+table(nyc_shoot$LOC_OF_OCCUR_DESC) #has 25596 missing values  
+table(nyc_shoot$LOC_CLASSFCTN_DESC) #has 25596 missing values
+table(nyc_shoot$LOCATION_DESC) #has 14977 missing values
+
+#Shows the total missing values in each column
+sum(nyc_shoot$LOC_OF_OCCUR_DESC %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$LOC_CLASSFCTN_DESC %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$LOCATION_DESC %in% c("(null)", ""), na.rm = TRUE)
+
+#Dropping columns w/ 50%+ missing values
+nyc_shoot <- subset(nyc_shoot, select = -c(LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, LOCATION_DESC))
+```
+Note: These columns have > 50% missing values and will not be useful for our analysis. These will be dropped.
+
+
+```{r}
+#Looks through distinct values within the demographic related categorical variables
+table(nyc_shoot$PERP_SEX) #has 10938 missing values
+table(nyc_shoot$PERP_AGE_GROUP) #has 10972 missing values
+table(nyc_shoot$PERP_RACE)  #has 10938 missing values
+table(nyc_shoot$VIC_SEX) #no missing values
+table(nyc_shoot$VIC_AGE_GROUP) #no missing values
+table(nyc_shoot$VIC_RACE) #no missing values
+
+#Shows the total missing values in each column
+sum(nyc_shoot$PERP_SEX %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$PERP_AGE_GROUP %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$PERP_RACE %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$VIC_SEX %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$VIC_AGE_GROUP %in% c("(null)", ""), na.rm = TRUE)
+sum(nyc_shoot$VIC_RACE %in% c("(null)", ""), na.rm = TRUE)
+
+#Filling missing values with "unknown"
+nyc_shoot <- nyc_shoot %>%
+  mutate(across(
+    c(PERP_SEX, PERP_AGE_GROUP, PERP_RACE, VIC_SEX),
+    ~replace(as.character(.), . == "" | . == "(null)" | . == "U" | is.na(.), "UNKNOWN"))) %>%
+  mutate(across(
+    c(PERP_SEX, PERP_AGE_GROUP, PERP_RACE, VIC_SEX),
+    as.factor))
+```
+Note: Over 30% of the perpetrator demographic variables contain missing values, with some already labeled as "UNKNOWN". I have chosen to impute the remaining missing entries with "UNKNOWN", as it is possible for such information to be unavailable when the perpetrator is not identified by either the victim or the police.
+
+
+Let's check the remaining columns to see whether there exist redundant categories, or missing values. 
+
+```{r}
+unique(nyc_shoot$BORO) 
+unique(nyc_shoot$PRECINCT) 
+unique(nyc_shoot$MURDER_FLAG) 
+```
+Note: Everything looks fine, so we'll move on to the next step.
+
+- Refactor column names
+
+```{r}
+#Renaming variables to match existing variable naming convention (SCREAMING_SNAKE_CASE)
+nyc_shoot <- nyc_shoot %>% rename(
+    LATITUDE = Latitude,
+    LONGITUDE = Longitude)
+```
+Note: Renaming to match original `SCREAMING_SNAKE_CASE` used for the majority of variable names.
+
+Let's also refomat `STATEN ISLAND` to `STATEN`
+
+```{r}
+nyc_shoot$BORO <- recode(nyc_shoot$BORO, "STATEN ISLAND" = "STATEN")
+```
+
+
+# Model Evaluaion
+
+In this section, we build and evaluate two models to extract deeper insights from the dataset. The first, is a spatial clustering model using DBSCAN, which explores the geographic spread and density of shooting related incidents. The second, is a time series analysis that examines borough-level trends in reported shootings (per 100,000 residents) during the period 2023–2024. We'll interpret the outputs of both models to assess the patterns and implications they reveal.
+
+**Key Questions:**
+
+- Model 1 (Spatial): What does the clustering reveal about the geographic distribution of incidents? Is there a discernible pattern in the clusterings of incident locations? 
+
+- Model 2 (Time Series): Do any of the boroughs show noticeable trends in the occurrences of shooting related incidents? Is there evidence of seasonality or recurring patterns?
+
+## Spatial Analysis: Shooting Incidents
+
+We aim to build a model that maps the dispersion of crime across New York City. The objective of this analysis is to identify potential crime hotspots and uncover any observable patterns in the occurrence of these incidents. To achieve this, we will first apply DBSCAN (Density-Based Spatial Clustering of Applications with Noise), an unsupervised clustering algorithm that groups together spatially dense areas of incidents. This will help visualize the geographic spread of shootings. We will then examine a table showing the composition of each cluster by borough, including which boroughs are present in each cluster and the total number of incidents per borough within that cluster. 
+
+```{r, comment=NA, warning=FALSE}
+
+#Selects columns for clustering
+COORD <- nyc_shoot %>%
+  select(LONGITUDE, LATITUDE)
+
+#Applies DBSCAN clustering on the coordinate data
+db <- dbscan(COORD, eps = 0.020,  minPts = 5)
+
+#Creates a new column in the dataset to store cluster assignments (useful for later step)
+nyc_shoot$cluster <- db$cluster
+
+#Shows scatter plot of coordinates colour coded by assigned DBSCAN cluster
+ggplot(nyc_shoot, aes(x = LONGITUDE, y = LATITUDE, color = factor(cluster))) +
+  scale_color_manual( values = c( "#f28500", "#680001","#d3aaa2", "#2a52be"),na.value = "gray") + 
+  geom_point(alpha = 0.7) +
+  labs(
+    color = "Cluster",  
+    title = "Spatial Clustering of Shooting Incidents Using DBSCAN") + theme_stata()
+```
+Note: This looks like the map of new york, where the different clusters represent distinct land masses within NYC. The dark red mass is the mainland NYC.
+
+```{r}
+#Looks at the representation of each borough within the clusters (excluding a few outliers)
+nyc_shoot %>%
+  filter(cluster != 0) %>% #Suppresses outlier.
+  count(cluster, BORO) %>%
+  arrange(cluster, desc(n))
+```
+
+Note: The above table illustrates the number of shooting incidents per cluster, broken down by borough. Also, outliers have been suppressed.
+
+**Analysis:**
+
+The DBSCAN algorithm identifies a total of four clusters. The cluster 0 appears to consist of outliers, while the clusters 1 through 3 form groupings that closely resemble distinct land masses within New York City. The empty zones between cluster 1 through 3 resemble water pathways. When compared to a geographical map of NYC, the spatial distribution of these clusters aligns remarkably well with the city's layout, suggesting that the DBSCAN has effectively captured the underlying geographic structure of the data.
+
+In the table following the DBSCAN visualization, the cluster 0 (the outliers) was excluded. The data shows that the vast majority of crimes, approximately 95 percent, occur within the cluster 1. This makes sense, as the cluster 1 includes four of the five boroughs: Manhattan, Brooklyn, the Bronx, and most of Queens, which together account for nearly 90 percent of the city's population. The cluster 2 corresponds to Staten Island, whilst the cluster 3 represents a small extension of Queens. These two clusters account for a much smaller portion of reported shooting incidents, perhaps suggesting that policing efforts should be less targeted to these areas.
+
+
+## Time Series: Shooting Incidents Per Capita (by Borough) 2023-2024
+
+In order to better understand the distribution of shooting-related crime per capita across NYC boroughs, I decided to conduct a temporal analysis focused on the years 2023 and 2024. Whilst the dataset spans over two decades, conducting a per capita analysis for the entire period is impractical due to challenges in obtaining consistent population data over time, and the requirement for intensive feature engineering. Additionally, the years 2020 to 2022 were likely affected by COVID policies, which may have distorted crime patterns making trend analysis less reliable. By focusing on 2023 and 2024, this analysis captures recent and more stable patterns in shooting incidents, offering a clearer picture of current borough-level trends. The population estimates used are assumed to be relatively stable over this short period, making per capita comparisons more valid. 
+
+Let's first confirm that indeed the last reported date falls sometime toward the end of the previous year (2024)
+
+```{r}
+#Confirming the latest incident date (should be end of prev. year)
+max(nyc_shoot$OCCUR_DATETIME)
+```
+
+
+Now, let's prep the data. 
+
+```{r}
+#Creating another dataframe for the time series data
+timeseries <- nyc_shoot
+
+#Filtering data on dates falling between start of 2023 to end of 2024 
+timeseries <- timeseries %>%
+  mutate(OCCUR_RECENT = as.Date(OCCUR_DATETIME)) %>% 
+  filter(between(OCCUR_RECENT, as.Date("2023-01-01"), max(OCCUR_RECENT, na.rm = TRUE)))
+
+#Creating a months column which is extracted from OCCUR_DATETIME
+timeseries <- timeseries %>%
+  mutate(OCCUR_MONTH = as.Date(floor_date(OCCUR_DATETIME, unit = "month")))
+
+#Confirming the earliest and latest dates are indeed the start of 2023, and the end of 2024
+max(timeseries$OCCUR_DATETIME)
+min(timeseries$OCCUR_DATETIME)
+glimpse(timeseries)
+```
+
+And now let's build our model ...
+
+```{r, warning=FALSE}
+#Setting static population estimates for 2024 (useful for per capita calculations)
+boro_pop <- c(
+  BRONX = 1384724,
+  BROOKLYN = 2617631,
+  MANHATTAN = 1660664,
+  QUEENS = 2316841,
+  STATEN = 498212)
+
+#Creates full date range for 2023–2024 (to include dates with no incidents)
+dates <- seq(as.Date("2023-01-01"), as.Date("2024-12-31"), by = "day")
+
+#Shows the total number of daily incidents (and daily incident per 100k residents) grouped by borough 
+timeseries_1 <- timeseries %>%
+  filter(BORO %in% names(boro_pop)) %>%
+  group_by(OCCUR_RECENT, BORO) %>%
+  summarise(INCIDENTS = n(), .groups = "drop") %>%
+  complete(OCCUR_RECENT = dates, BORO = names(boro_pop), fill = list(INCIDENTS = 0)) %>% 
+  mutate(INCIDENT_PERCAP = INCIDENTS / (boro_pop[BORO] / 100000)) %>%
+  arrange(BORO, OCCUR_RECENT)
+
+
+#Shows time series plot on daily shooting incident per 100k resid. by borough
+ggplot(timeseries_1, aes(x = OCCUR_RECENT, y = INCIDENT_PERCAP, color = BORO)) +
+  geom_line(size = 1) + 
+  scale_color_manual( values = c( "#680001", "cyan", "#2a52be", "#f28500","gray"),na.value = "black") +
+  labs(
+    title = "Daily Per Capita Shooting Incidents by Borough (2023–2024)",
+    x = "Date",
+    y = "Incidents per 100K residents", 
+    color = "Borough") + theme_stata() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1),
+      legend.text = element_text(size = 10),       
+      legend.title = element_text(size = 12),    
+      legend.key.size = unit(0.4, "cm"))
+```
+Note: From the above graph, it appears as though the Bronx has a notably higher number of reported shooting incidents per capita compared to the boroughs.  On this scale it is a bit difficult to see how the other boroughs compare, to get a better view let's look at monthly incidents per capita. Also, to ensure continuity, we included the full date range for both years, allowing even days with no reported incidents to appear in the graph.
+
+
+
+Let's show the monthly incidents to perhaps get a clearer view of the trends.
+
+```{r, warning=FALSE}
+#Shows the number of monthly incidents (and monthly incident per 100k residents) grouped by borough 
+timeseries_2 <- timeseries %>%
+  filter(BORO %in% names(boro_pop)) %>%
+  group_by(OCCUR_MONTH, BORO) %>%
+  summarise(INCIDENTS = n(), .groups = "drop") %>%
+  mutate(INCIDENT_PERCAP = INCIDENTS / (boro_pop[BORO] / 100000))
+
+#Filters the data to only include months within the 2023–2024 time frame and creates formatted labels
+timeseries_2 <- timeseries_2 %>%
+  filter(OCCUR_MONTH >= as.Date("2023-01-01") & OCCUR_MONTH <= as.Date("2024-12-31")) %>%
+  mutate(MONTH_LABEL = format(OCCUR_MONTH, "%b %Y")) %>%
+  mutate(MONTH_LABEL = factor(MONTH_LABEL, levels = unique(MONTH_LABEL)))
+
+#Plots a bar chart of the monthly per capita incidents
+ggplot(timeseries_2, aes(x = MONTH_LABEL, y = INCIDENT_PERCAP, fill = BORO)) +
+  geom_col(position = "stack", width = 0.8) +
+  labs(
+    title = "Monthly Incidents per capita by Borough (2023–2024)",
+    x = "Date",
+    y = "Incidents per 100K residents",
+    fill = "Borough") +
+  scale_fill_manual(values = c( "#680001", "#d3aaa2", "#2a52be", "#f28500", "cyan"), na.value = "gray") + theme_stata() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    legend.text = element_text(size = 10),       
+    legend.title = element_text(size = 12),    
+    legend.key.size = unit(0.4, "cm"))
+```
+
+Note: Examining the graph above, which shows the monthly per capita incidents per borough, it appears as though the data exhibits a somewhat cyclical pattern, with shooting incidents peaking around the summer months, and declining as winter approaches, bottoming out in the winter months. 
+
+
+```{r}
+#Shows the number of monthly incidents (and monthly incident per 100k residents) grouped by borough 
+timeseries_2 <- timeseries %>%
+  filter(BORO %in% names(boro_pop)) %>%
+  group_by(OCCUR_MONTH, BORO) %>%
+  summarise(INCIDENTS = n(), .groups = "drop") %>%
+  mutate(INCIDENT_PERCAP = INCIDENTS / (boro_pop[BORO] / 100000))
+
+#Filters the data to only include months within the 2023–2024 time frame and creates formatted labels
+timeseries_2 <- timeseries_2 %>%
+  filter(OCCUR_MONTH >= as.Date("2023-01-01") & OCCUR_MONTH <= as.Date("2024-12-31")) %>%
+  mutate(MONTH_LABEL = format(OCCUR_MONTH, "%b %Y")) %>%
+  mutate(MONTH_LABEL = factor(MONTH_LABEL, levels = unique(MONTH_LABEL)))
+
+#Creates a stacked proportional bar chart showing the monthly shooting incidents per capita by borough
+ggplot(timeseries_2, aes(x = MONTH_LABEL, y = INCIDENT_PERCAP, fill = BORO)) +
+  geom_col(position = "fill", width = 0.8) +
+  labs(
+    title = "Prop. Monthly Incidents per capita by Borough (2023–2024)",
+    x = "Date",
+    y = "Ratio of Incidents",
+    fill = "Borough") +
+  scale_fill_manual(values = c( "#680001", "#d3aaa2", "#2a52be", "#f28500", "cyan"), 
+                    na.value = "gray") + theme_stata() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    legend.text = element_text(size = 10),       
+    legend.title = element_text(size = 12),    
+    legend.key.size = unit(0.4, "cm"))
+```
+
+```{r}
+#Shows the annual per capita incidents by borough
+timeseries_2 %>%
+  mutate(YEAR = lubridate::year(OCCUR_MONTH)) %>%
+  group_by(BORO, YEAR) %>%
+  summarise(TOT_PERCAP = sum(INCIDENT_PERCAP, na.rm = TRUE), .groups = "drop")
+```
+Note: Here, we’re able to more clearly see how the boroughs compare in terms of shooting-related crime. In both 2023 and 2024, the Bronx consistently had significantly higher per capita shooting incidents than any other borough. Brooklyn and Manhattan are distant seconds, both with per capita incidents more than 50% lower than the Bronx. While Brooklyn had a higher number of reported incidents per cap in 2023, in 2024, its per capita rate was nearly identical to Manhattan’s. Queens and Staten Island had the lowest shooting rates overall, with Staten Island standing out as the only borough to have entire months with zero reported shooting incidents.
+
+**Analysis:**
+
+In the first graph, we examine daily shooting incidents per 100,000 residents, broken down by borough. While the raw data only includes days with reported incidents, we explicitly included days with zero incidents for each borough. By covering the full date range, we ensure a continuous and accurate line chart, which is essential for interpreting trends over time. The graph shows some volatility but no clear upward or downward trend, indicating that although shootings fluctuate daily, there’s no significant increase or decrease in per capita shooting incidents overall.
+
+At the borough level, the Bronx stands out with noticeably higher per capita shootings compared to the other borough. Among the remaining boroughs, the differences are less distinct, though Manhattan appears to have more peaks in 2024, while Staten Island had more peaks in 2023. To better capture any underlying cyclical patterns, we turn to the next graph, which presents monthly shooting incidents per capita by borough.
+
+In the second graph, a clear cyclical pattern emerges, we see a rising incidents per capita as summer approach, peaking in the summer months, and then declining steadily and bottoming out in the winter. This "cyclical" behaviour can be described as seasonality. Whilst we cannot say for certain what drives the seasonal shift, these patterns could indicate that harsher weather is a potential deterrent to criminal behaviour, while warmer weather creates a more conducive environment.
+
+The final graph is a stacked bar chart designed to visualize how each borough compares in terms of monthly shooting incidents per capita. From this visualization, it's evident that the Bronx stands out with a notably prominent crime rate compared to the other boroughs. Brooklyn emerges as a distant second, although the gap has significantly narrowed between it and Manhattan in 2024. For the remaining boroughs, it is still quite difficult to confidently distinguish their values clearly in the graph, prompting a closer look at the accompanying table. The table confirms that the Bronx leads by a substantial margin in shootings per capita, followed by Brooklyn and then Manhattan. Queens and Staten Island report the lowest rates, with Staten Island notably having several months with zero reported shooting incidents.
+
+Looking at the interannual changes, the Bronx and Manhattan were the only two boroughs that experienced an increase in shooting incidents per capita between 2023 and 2024. While this is a notable observation, we cannot confidently interpret it as part of a larger trend without data from additional years. In contrast, Brooklyn, Queens, and Staten Island all saw declines, with Staten Island experiencing a 50%+ dip. However, due to Staten Island's relatively small population, its per capita rates tend to be more volatile, meaning this large decline could be exaggerated and should be interpreted with a degree of skepticism.
+
+Overall, the Bronx has consistently stood out in terms of having the highest shooting incidents per capita. Based on my observations, it is clear that more policing efforts and resources should be diverted toward the Bronx. Increased patrols can act as a deterrent, and stronger, positive community-police engagement may encourage residents to take an active role in enhancing the safety of their borough.
+
+\vspace{3cm}
+
+
+# Limitations & Challenges
+Finally, we discuss some of then biases, challenges, and limitations we encountered throughout this report.
+
+## Bias
+
+I think it is easy for individuals to develop bias when analyzing this dataset, particularly because it includes information about the race of perpetrators. Whilst race can be viewed as just another identifier, like age or sex, the inclusion in crime data can have social repercussions. Although the intention behind including race may be to aid identification, it can inadvertently reinforce racial stereotypes and/or divide. In the case of this analysis, I chose to rather focus on geo-information of the crime, to try to identify whether there were any patterns or trends (cyclical or otherwise) in the occurrences of shooting incidents.
+
+## Other Factors
+
+**Assumptions:**
+
+Model 2 (Time Series)
+
+- Excluded 2020-2022 data, since these were COVID-19 periods and would have been impacted by COVID-related policies, potentially leading to a distortion in crime patterns.
+- Used an static estimate populations for 2024 to compute the per capita shooting incidents for each borough, which assumes that population change over a year course would likely not change drastically.
+
+**Challenges**
+
+- Identifying missing or "unknown" values: This was tricky in character and factor variables, especially in perpetrator demographic fields, which showed varying degrees of missingness.
+- Deciding how to handle missing values: For the spatial model, a small portion (<1%) of coordinate data was missing, and I imputed these using the mean longitudes/lattitudes of the corresponding borough (based on the borough listed in each affected row).
+
+# Conclusion 
+
+Throughout this report we refer to "shooting incidents", which is really "reported shooting incidents" as the data pertains to, and is only relevant to reporting. We had build two models, the first was a spatial clustering  model using DBSCAN, and the second was a time series model (daily, monthly, and annually) showing the per capita shooting incident (per 100K residents) by borough for 2023 to 2024. The spatial analysis revealed  a heavy concentration of shooting incidents in more populous boroughs, which are the Bronx, Brooklyn, Manhattan, and most of Queens (see cluster 1). The time series analysis provided a detailed breakdown of incidents over time by borough, illustrating that the Bronx maintained the highest shooting rates over time. This reinforced by the monthly incident per capita graph, and the annual incident table breakdown. The Bronx, alongside Manhattan, were the only boroughs that exhibited an upward trend in annual per capita incidents. Meanwhile, Brooklyn, Queens, and Staten Island showed declining trends, with Staten Island’s small population contributing to greater volatility in its per capita measures. Together, these analyses highlighted the Bronx as a persistent hotspot requiring targeted intervention. To address this, focused policing strategies, increased patrols, and enhanced community engagement efforts are required. Moreover, continued monitoring through spatial and temporal data will be critical to adapting interventions and evaluating their effectiveness over time. Ultimately, combining geographic insights with temporal pattern provides a robust framework to inform public safety policies and resource allocation aimed at reducing shooting-related incidents across NYC.
+
+**Further Work:**
+
+Model 1 (Spatial):  
+
+- Observe spatial patterns based on fatality.
+- Overlay DBSCAN plot with actual nyc map to compare. 
+- Compare DBSCAN plot to a population density plot to derive further insights.
+
+Model 2 (Time Series): 
+
+- Observe at a longer duration period to determine whether observations made still hold true.
+
+# References
+
+[1]“NYPD Shooting Incident Data (Historic),” Data.gov, Nov. 22, 2021. https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+
+\ \
+[2] RStudio, “Data Visualization with ggplot2,” GitHub, Accessed Jun. 20, 2025. [Online]. Available: https://github.com/rstudio/cheatsheets/blob/main/data-visualization.pdf
+
+\ \
+[3] "New York City (United States): Boroughs - Population Statistics, Maps, Charts and Weather," CityPopulation, 2023. [Online]. Available: https://www.citypopulation.de/en/usa/newyorkcity/. [Accessed: 20-Jun-2025].
+
